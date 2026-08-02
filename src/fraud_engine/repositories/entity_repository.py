@@ -117,3 +117,15 @@ async def add_list_entry(
     row = await cur.fetchone()
     assert row is not None
     return row
+
+
+async def find_entity_by_id(conn: AsyncConnection, entity_id: UUID) -> dict[str, Any] | None:
+    cur = await conn.execute(
+        """
+        SELECT id, entity_type, value_hash, display_hint,
+               first_seen_at, last_seen_at, seen_count
+          FROM entities WHERE id = %s
+        """,
+        (entity_id,),
+    )
+    return await cur.fetchone()
