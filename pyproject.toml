@@ -1,0 +1,49 @@
+[project]
+name = "fraud-engine"
+version = "0.1.0"
+description = "Real-time payment fraud decision engine: versioned rules, velocity features, shared-attribute linking, reproducible decisions, and backtesting against labelled outcomes."
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Sief Alsheyab", email = "alsheyab.seif@gmail.com" }]
+
+# Every dependency below ships a prebuilt wheel for cp312/manylinux.
+# This machine has python3.10 headers but runs python3.12, so anything
+# requiring a source build would fail with 'Python.h: No such file'.
+# psycopg[binary] in particular bundles libpq rather than compiling it.
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "psycopg[binary,pool]>=3.2",
+  "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "httpx>=0.28",
+  "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fraud_engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# Show the reason a test was skipped, and fail on unraisable warnings that
+# would otherwise scroll past unnoticed.
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]

@@ -1,0 +1,39 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# environments
+.venv/
+venv/
+.env
+.env.local
+*.local
+
+# tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# data / artefacts
+*.log
+*.db
+*.sqlite3
+data/*.csv
+data/*.parquet
+!data/.gitkeep
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store
+
+# secrets
+*.pem
+*.key

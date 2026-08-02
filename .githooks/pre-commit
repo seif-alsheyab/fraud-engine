@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Guard: this repo must only carry commits authored by Sief Alsheyab.
+# The machine's GLOBAL git identity is a different account (hathunter), so
+# without this hook a missing local config silently produces commits that
+# GitHub cannot attribute to the author.
+EXPECTED="alsheyab.seif@gmail.com"
+ACTUAL="$(git config user.email || true)"
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  echo "" >&2
+  echo "COMMIT BLOCKED - wrong author identity" >&2
+  echo "  configured : ${ACTUAL:-<unset>}" >&2
+  echo "  expected   : $EXPECTED" >&2
+  echo "  fix        : git config user.email \"$EXPECTED\"" >&2
+  echo "               git config user.name  \"Sief Alsheyab\"" >&2
+  echo "" >&2
+  exit 1
+fi
+
+# Guard: never commit a .env file, whatever the gitignore says.
+if git diff --cached --name-only | grep -qE '(^|/)\.env$'; then
+  echo "COMMIT BLOCKED - .env is staged and must never be committed" >&2
+  exit 1
+fi
