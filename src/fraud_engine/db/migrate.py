@@ -63,13 +63,12 @@ async def run() -> int:
                 print(f"  skip   {path.name}")
                 continue
 
-            async with connection() as conn:
-                async with conn.transaction():
-                    await conn.execute(sql)
-                    await conn.execute(
-                        "INSERT INTO schema_migrations (filename, checksum) VALUES (%s, %s)",
-                        (path.name, checksum),
-                    )
+            async with connection() as conn, conn.transaction():
+                await conn.execute(sql)
+                await conn.execute(
+                    "INSERT INTO schema_migrations (filename, checksum) VALUES (%s, %s)",
+                    (path.name, checksum),
+                )
             print(f"  apply  {path.name}")
             count += 1
 
