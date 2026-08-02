@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fraud-engine-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fraud
+      POSTGRES_PASSWORD: fraud_dev_pw
+      POSTGRES_DB: fraud_engine
+    # Bound to 127.0.0.1 so the database is not reachable from the network.
+    # Port 5434 because 5433 belongs to chargeback-iq and 5432 to anything
+    # else that may appear on this machine.
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - fraud_pgdata:/var/lib/postgresql/data
+    command:
+      # Log any statement slower than 200ms. A fraud decision has a latency
+      # budget; without this the slow query is invisible until production.
+      - "postgres"
+      - "-c"
+      - "log_min_duration_statement=200"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fraud -d fraud_engine"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  fraud_pgdata:

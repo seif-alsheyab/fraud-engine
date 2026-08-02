@@ -37,6 +37,9 @@ packages = ["src/fraud_engine"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# pytest-asyncio 1.x requires this to be explicit; without it every
+# run emits a deprecation warning that trains you to ignore warnings.
+asyncio_default_fixture_loop_scope = "function"
 # Show the reason a test was skipped, and fail on unraisable warnings that
 # would otherwise scroll past unnoticed.
 addopts = "-ra --strict-markers"
