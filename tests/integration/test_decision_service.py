@@ -227,11 +227,45 @@ class TestReviewQueue:
                 conn, _payload(merchant_code=m["code"], external_id="rev-1"), now=NOW
             )
             assert result["decision"] == "REVIEW"
-            queue = await dr.list_open_review_cases(conn)
+
+            # Scope the assertion to THIS test's transaction.
+            #
+            # The original read `assert len(queue) == 1` -- which asserts that
+            # no other open review case exists anywhere in the database. That
+            # passed only while the database happened to be empty, and broke
+            # the moment the demo seed created its own review cases. A test
+            # whose result depends on unrelated global state is not testing
+            # what it claims to test.
+            queue = await dr.list_open_review_cases(conn, limit=200)
+            ours = [c for c in queue if c["external_id"] == "rev-1"]
+            assert len(ours) == 1
+
             # An unreviewed order is an unshipped order, so the case carries
             # its own deadline.
-            assert len(queue) == 1
-            assert queue[0]["sla_due_at"] > NOW
+            assert ours[0]["sla_due_at"] > NOW
+
+    async def test_the_queue_is_ordered_by_sla_regardless_of_other_cases(self):
+        """Ordering must hold whatever else is in the queue.
+
+        Complements the test above: that one checks a specific case exists,
+        this one checks the queue's contract without counting rows.
+        """
+        async with rollback_conn() as conn:
+            m = await seed_merchant(conn)
+            rs = await seed_ruleset(conn, m["id"], challenge_at=10, review_at=20,
+                                    decline_at=90)
+            await seed_rule(conn, rs["id"], code="ALWAYS", name="always",
+                            condition={"feature": "amount_minor", "op": "gte", "value": 1},
+                            weight=25)
+            for i in range(3):
+                await decide_payment(
+                    conn,
+                    _payload(merchant_code=m["code"], external_id=f"rev-order-{i}"),
+                    now=NOW,
+                )
+            queue = await dr.list_open_review_cases(conn, limit=200)
+            dues = [c["sla_due_at"] for c in queue]
+            assert dues == sorted(dues)
 
 
 class TestShadowMode:

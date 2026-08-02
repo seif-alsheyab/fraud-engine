@@ -211,7 +211,25 @@ class RulePerformance:
     weight: int = 0
 
     @property
+    def is_protective(self) -> bool:
+        """A negative-weight rule REDUCES risk instead of raising it.
+
+        3-D Secure authentication and a long good history are supposed to
+        fire on legitimate traffic -- that is their entire purpose.
+        """
+        return self.weight < 0
+
+    @property
     def precision(self) -> float | None:
+        """Share of firings that were on real fraud.
+
+        Returns None for protective rules. Reporting "THREE_DS_OK: 0.0%
+        precision" is not a poor score, it is a category error: the rule is
+        MEANT to fire on good customers, and a dashboard that ranks it
+        alongside detection rules invites someone to delete it.
+        """
+        if self.is_protective:
+            return None
         labelled = self.fired_on_fraud + self.fired_on_legitimate
         return _rate(self.fired_on_fraud, labelled)
 
@@ -234,6 +252,7 @@ class RulePerformance:
             "code": self.code,
             "name": self.name,
             "weight": self.weight,
+            "kind": "PROTECTIVE" if self.is_protective else "DETECTION",
             "fired_count": self.fired_count,
             "fired_on_fraud": self.fired_on_fraud,
             "fired_on_legitimate": self.fired_on_legitimate,

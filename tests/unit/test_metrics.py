@@ -141,3 +141,45 @@ class TestRulePerformance:
             out("DECLINE", "FRAUD", rules=[{"code": "LOUD", "name": "l", "weight": 1}]),
         ]
         assert [p.code for p in build_rule_performance(rows)] == ["LOUD", "RARE"]
+
+
+class TestProtectiveRules:
+    """Negative-weight rules are not failing detection rules.
+
+    THREE_DS_OK fired 407 times on the demo data with 0% precision, which
+    looks catastrophic and is actually correct: it carries a weight of -35
+    and exists to REDUCE the score for authenticated customers. Reporting it
+    in the same column as a detection rule invites someone to delete the
+    thing keeping good customers approved.
+    """
+
+    def test_a_protective_rule_reports_no_precision(self):
+        rows = [
+            out("APPROVE", "LEGITIMATE",
+                rules=[{"code": "THREE_DS", "name": "3DS ok", "weight": -35}])
+            for _ in range(50)
+        ]
+        perf = build_rule_performance(rows)[0]
+        assert perf.is_protective is True
+        assert perf.precision is None
+        assert perf.as_dict()["kind"] == "PROTECTIVE"
+
+    def test_a_detection_rule_still_reports_precision(self):
+        rows = [
+            out("DECLINE", "FRAUD",
+                rules=[{"code": "VEL", "name": "velocity", "weight": 35}]),
+            out("DECLINE", "LEGITIMATE",
+                rules=[{"code": "VEL", "name": "velocity", "weight": 35}]),
+        ]
+        perf = build_rule_performance(rows)[0]
+        assert perf.is_protective is False
+        assert perf.precision == 0.5
+        assert perf.as_dict()["kind"] == "DETECTION"
+
+    def test_a_protective_rule_has_no_lift_either(self):
+        rows = [
+            out("APPROVE", "LEGITIMATE",
+                rules=[{"code": "TRUSTED", "name": "trusted", "weight": -20}])
+        ]
+        perf = build_rule_performance(rows)[0]
+        assert perf.lift(0.02) is None
