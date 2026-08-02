@@ -165,7 +165,16 @@ async def decide_payment(
         "merchant_id": merchant["id"],
         "external_id": payload["external_id"],
         "amount_minor": payload["amount_minor"],
-        "currency": payload.get("currency", merchant["currency"]),
+        # `or`, not .get(k, default). dict.get returns its default only
+        # when the key is ABSENT; Pydantic emits every field, so an
+        # omitted currency arrives as a PRESENT key set to None and goes
+        # straight into a NOT NULL column.
+        #
+        # This is the defect a live smoke test found and 130 tests missed,
+        # because every test payload happened to supply a currency.
+        # Fields like channel and is_card_present were never at risk:
+        # Pydantic gives them real defaults, so they are never None.
+        "currency": payload.get("currency") or merchant["currency"],
         "card_bin": payload.get("card_bin") if bin_info else None,
         "card_last4": display_hint("CARD", str(payload["card_number"]))
         if payload.get("card_number") else None,

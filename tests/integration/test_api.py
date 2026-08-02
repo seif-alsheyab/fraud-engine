@@ -308,3 +308,63 @@ class TestReference:
         # Not 404: "already resolved by a colleague" and "does not exist"
         # both mean the same thing to the caller -- you cannot act on it.
         assert r.status_code == 409
+
+
+class TestMinimalPayload:
+    """The smallest request a real caller can send.
+
+    A live smoke test found a NOT NULL violation here that 130 tests missed,
+    because every test payload supplied every optional field.
+    """
+
+    async def test_a_minimal_payload_returns_a_decision(self, client):
+        r = await client.post("/v1/decide", json={
+            "merchant_code": f"{SCOPE}-M",
+            "external_id": f"{SCOPE}-minimal-1",
+            "amount_minor": 25000,
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["decision"] in {"APPROVE", "CHALLENGE", "REVIEW", "DECLINE"}
+
+    async def test_explicit_nulls_on_nullable_fields_are_accepted(self, client):
+        """Nullable fields may be sent as null.
+
+        currency and card_number are typed `str | None`, so an explicit null
+        is valid input and must fall back to the merchant currency rather
+        than reaching a NOT NULL column.
+        """
+        r = await client.post("/v1/decide", json={
+            "merchant_code": f"{SCOPE}-M",
+            "external_id": f"{SCOPE}-minimal-2",
+            "amount_minor": 25000,
+            "currency": None,
+            "card_number": None,
+        })
+        assert r.status_code == 200, r.text
+
+    async def test_a_null_on_a_non_nullable_field_is_rejected(self, client):
+        """Optional is not the same as nullable.
+
+        `channel: Literal["WEB","MOBILE","API","POS"] = "WEB"` may be OMITTED
+        -- Pydantic then supplies "WEB" -- but null is not one of the four
+        permitted values. Rejecting it with a field-level 422 is correct: a
+        caller sending null meant something, and silently substituting a
+        default would hide the mistake.
+        """
+        r = await client.post("/v1/decide", json={
+            "merchant_code": f"{SCOPE}-M",
+            "external_id": f"{SCOPE}-null-channel",
+            "amount_minor": 25000,
+            "channel": None,
+        })
+        assert r.status_code == 422
+        detail = r.json()["detail"][0]
+        assert detail["loc"] == ["body", "channel"]
+
+    async def test_an_omitted_channel_uses_the_pydantic_default(self, client):
+        r = await client.post("/v1/decide", json={
+            "merchant_code": f"{SCOPE}-M",
+            "external_id": f"{SCOPE}-omitted-channel",
+            "amount_minor": 25000,
+        })
+        assert r.status_code == 200, r.text

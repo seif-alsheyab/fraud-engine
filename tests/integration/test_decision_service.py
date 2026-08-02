@@ -321,3 +321,69 @@ class TestLatency:
             stored = await dr.find_decision(conn, result["decision_id"])
             assert stored["latency_ms"] >= 0
             assert stored["exceeded_budget"] is False
+
+
+class TestOmittedOptionalFields:
+    """A caller who omits optional fields must still get a decision.
+
+    Every other test in this file sends a full payload, which is exactly how
+    a NOT NULL violation on `currency` survived 130 green tests and appeared
+    only when a real client called the live server. Tests that mirror the
+    author's assumptions test the assumptions, not the contract.
+    """
+
+    async def test_a_payload_with_only_required_fields_succeeds(self):
+        async with rollback_conn() as conn:
+            m = await seed_merchant(conn, currency="USD")
+            await _ruleset_with_standard_rules(conn, m["id"])
+            result = await decide_payment(conn, {
+                "merchant_code": m["code"],
+                "external_id": "minimal-1",
+                "amount_minor": 25000,
+            }, now=NOW)
+            assert result["decision"] in {"APPROVE", "CHALLENGE", "REVIEW", "DECLINE"}
+
+    async def test_currency_present_but_null_falls_back_to_the_merchant(self):
+        async with rollback_conn() as conn:
+            m = await seed_merchant(conn, currency="USD")
+            await _ruleset_with_standard_rules(conn, m["id"])
+            result = await decide_payment(conn, {
+                "merchant_code": m["code"],
+                "external_id": "no-currency-1",
+                "amount_minor": 25000,
+                "currency": None,      # exactly what Pydantic emits
+            }, now=NOW)
+            cur = await conn.execute(
+                "SELECT currency FROM transactions WHERE id = %s",
+                (result["transaction_id"],),
+            )
+            assert (await cur.fetchone())["currency"] == "USD"
+
+    async def test_the_exact_dict_pydantic_produces_is_accepted(self):
+        """Guards the real boundary: what model_dump() actually emits.
+
+        Hand-written test dicts drift from the API contract. This payload is
+        built by the request model itself, so it cannot.
+        """
+        from fraud_engine.api.schemas import DecisionRequest
+
+        async with rollback_conn() as conn:
+            m = await seed_merchant(conn, currency="EUR")
+            await _ruleset_with_standard_rules(conn, m["id"])
+
+            request = DecisionRequest(
+                merchant_code=m["code"],
+                external_id="pydantic-dump-1",
+                amount_minor=25000,
+                card_number="4111111111111111",
+            )
+            result = await decide_payment(conn, request.model_dump(), now=NOW)
+
+            cur = await conn.execute(
+                "SELECT currency, is_card_present, channel FROM transactions WHERE id = %s",
+                (result["transaction_id"],),
+            )
+            row = await cur.fetchone()
+            assert row["currency"] == "EUR"
+            assert row["is_card_present"] is False
+            assert row["channel"] == "WEB"
