@@ -233,6 +233,27 @@ class RulePerformance:
         labelled = self.fired_on_fraud + self.fired_on_legitimate
         return _rate(self.fired_on_fraud, labelled)
 
+    @property
+    def protection_error_rate(self) -> float | None:
+        """For a PROTECTIVE rule: how often it lowered the score on fraud.
+
+        A protective rule is supposed to fire on good customers. But every
+        time it fires on a transaction that turns out to be fraud, it made
+        that fraud HARDER to catch by reducing its score.
+
+        TRUSTED_CARD fired on 6 cases in the demo data, 4 of them fraud --
+        a 67% protection error rate. That is a real problem the `kind` split
+        alone would have hidden: the rule is not a bad detector, it is a
+        protective rule being exploited, which is what a bust-out attack
+        does by design (build history, then abuse the trust it bought).
+
+        Returns None for detection rules, where the concept does not apply.
+        """
+        if not self.is_protective:
+            return None
+        labelled = self.fired_on_fraud + self.fired_on_legitimate
+        return _rate(self.fired_on_fraud, labelled)
+
     def lift(self, base_fraud_rate: float | None) -> float | None:
         """How much better than guessing?
 
@@ -257,6 +278,7 @@ class RulePerformance:
             "fired_on_fraud": self.fired_on_fraud,
             "fired_on_legitimate": self.fired_on_legitimate,
             "precision": self.precision,
+            "protection_error_rate": self.protection_error_rate,
             "lift": self.lift(base_fraud_rate),
         }
 

@@ -183,3 +183,48 @@ class TestProtectiveRules:
         ]
         perf = build_rule_performance(rows)[0]
         assert perf.lift(0.02) is None
+
+
+class TestProtectionErrorRate:
+    """A protective rule firing on fraud made that fraud harder to catch.
+
+    The kind=PROTECTIVE split correctly stops a negative-weight rule being
+    ranked as a bad detector. But it would also hide a real signal: on the
+    demo data TRUSTED_CARD fired six times, four of them on fraud. That is a
+    protective rule being exploited -- exactly what a bust-out attack does,
+    by building history and then abusing the trust it bought.
+    """
+
+    def test_a_protective_rule_firing_on_fraud_is_measured(self):
+        rows = [
+            out("APPROVE", "FRAUD",
+                rules=[{"code": "TRUSTED", "name": "trusted", "weight": -20}])
+            for _ in range(4)
+        ] + [
+            out("APPROVE", "LEGITIMATE",
+                rules=[{"code": "TRUSTED", "name": "trusted", "weight": -20}])
+            for _ in range(2)
+        ]
+        perf = build_rule_performance(rows)[0]
+        assert perf.is_protective is True
+        assert perf.precision is None                      # not a detector
+        assert perf.protection_error_rate is not None
+        assert round(perf.protection_error_rate, 3) == 0.667
+
+    def test_a_healthy_protective_rule_has_a_low_error_rate(self):
+        rows = [
+            out("APPROVE", "LEGITIMATE",
+                rules=[{"code": "THREE_DS", "name": "3ds", "weight": -35}])
+            for _ in range(99)
+        ] + [
+            out("APPROVE", "FRAUD",
+                rules=[{"code": "THREE_DS", "name": "3ds", "weight": -35}])
+        ]
+        perf = build_rule_performance(rows)[0]
+        assert perf.protection_error_rate == 0.01
+
+    def test_detection_rules_have_no_protection_error_rate(self):
+        rows = [out("DECLINE", "FRAUD",
+                    rules=[{"code": "VEL", "name": "vel", "weight": 35}])]
+        perf = build_rule_performance(rows)[0]
+        assert perf.protection_error_rate is None
