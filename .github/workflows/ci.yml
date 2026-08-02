@@ -6,9 +6,30 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege. Without this block the token inherits the repository
+# default, which historically was write access to contents. A workflow that
+# only needs to read code should not be able to push to it.
+permissions:
+  contents: read
+
+# A fork can open many pull requests. Cancelling superseded runs stops that
+# consuming the account's Actions minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    # Fork pull requests do NOT run this workflow. A fork's PR executes code
+    # the fork author controls; running it against this repository's job
+    # definition is an unnecessary surface, and nothing external is trusted
+    # here anyway.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
@@ -27,8 +48,8 @@ jobs:
         ports:
           - 5432:5432
         # Without a health check the job races the database and fails
-        # intermittently -- the worst kind of CI failure, because it looks
-        # like a flaky test rather than a missing dependency.
+        # intermittently — the worst kind of CI failure, because it looks like
+        # a flaky test rather than a missing dependency.
         options: >-
           --health-cmd "pg_isready -U fraud -d fraud_engine"
           --health-interval 5s
@@ -37,10 +58,10 @@ jobs:
 
     env:
       # CI reaches the service container on 5432. Local development uses 5434
-      # to avoid colliding with other Postgres instances on the machine.
+      # to avoid colliding with any other Postgres on the machine.
       DATABASE_URL: postgresql://fraud:fraud_dev_pw@localhost:5432/fraud_engine
-      # Test-only. A real deployment rotates this per environment; a leaked
-      # salt makes every pseudonymised identifier brute-forceable.
+      # Test-only value. A real deployment rotates this per environment: a
+      # leaked salt makes every pseudonymised identifier brute-forceable.
       ENTITY_HASH_SALT: ci_only_salt_at_least_16_chars
       APP_ENV: test
       LOG_LEVEL: error
@@ -48,13 +69,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
-      - name: Set Python ${{ matrix.python-version }}
+      - name: Pin Python ${{ matrix.python-version }}
         run: uv python pin ${{ matrix.python-version }}
 
       # --frozen installs exactly what uv.lock pins and fails if the lock and
@@ -77,14 +100,14 @@ jobs:
 
       # Running twice proves the suites clean up after themselves. A suite
       # that only passes on a virgin database is not a suite you can trust.
-      - name: Test suite again (proves cleanup is repeatable)
+      - name: Test suite again (cleanup is repeatable)
         run: uv run pytest -q
 
       - name: Generate synthetic data
         run: uv run python scripts/generate.py --seed 42 --days 90 --volume 800 --fraud-rate 0.02
 
       # The stronger guarantee: the suite must pass on a POPULATED database.
-      # An empty-database pass only shows the tests coexist with emptiness.
+      # Passing on an empty one only shows the tests coexist with emptiness.
       - name: Test suite against populated data
         run: uv run pytest -q
 
@@ -92,7 +115,7 @@ jobs:
         run: |
           uv run python -m fraud_engine.api.server > /tmp/server.log 2>&1 &
           SERVER_PID=$!
-          for i in $(seq 1 25); do
+          for _ in $(seq 1 25); do
             curl -sf http://127.0.0.1:4020/health >/dev/null && break
             sleep 1
           done
@@ -100,8 +123,8 @@ jobs:
           echo "ready    -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4020/ready)"
           echo "features -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4020/v1/features)"
 
-          # The minimal payload: the exact case that returned 500 before the
-          # currency fix. Regression-guarded in CI, not just in a unit test.
+          # The minimal payload: the exact request that returned 500 before the
+          # currency fix. Regression-guarded in CI, not only in a unit test.
           curl -sf -X POST http://127.0.0.1:4020/v1/decide \
             -H 'content-type: application/json' \
             -d '{"merchant_code":"DEMO-SHOP","external_id":"ci-minimal","amount_minor":25000}' \

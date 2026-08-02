@@ -1,0 +1,39 @@
+name: Close external pull requests
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  close:
+    # The owner's own pull requests are left alone.
+    if: github.event.pull_request.user.login != github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Comment, close and lock
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR" --repo "$REPO" --body \
+          "Thank you for looking at this repository.
+
+          This project is published for **viewing only** and does not accept
+          contributions. Pull requests are closed automatically.
+
+          Please see \`LICENSE\` for the terms under which the source is made
+          available.
+
+          — automated"
+
+          gh pr close "$PR" --repo "$REPO"
+
+          # Locking prevents further comments on a closed thread.
+          gh api -X PUT "repos/$REPO/issues/$PR/lock" \
+            -f lock_reason=resolved || true
