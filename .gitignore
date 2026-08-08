@@ -37,3 +37,11 @@ data/*.parquet
 # secrets
 *.pem
 *.key
+
+# IEEE-CIS competition data — non-commercial licence, not redistributable.
+# Kaggle/Vesta terms permit academic use only, so the CSVs are read from
+# IEEE_DATA_PATH and never enter the repository (plan §1.1).
+data/ieee/
+*.csv
+!tests/fixtures/*.csv
+docs/IEEE_BACKTEST_PLAN.md

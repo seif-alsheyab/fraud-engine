@@ -35,6 +35,7 @@ value that produced that answer.
 | [Every decision is reproducible](#every-decision-is-reproducible) | Append-only decisions, honest backtesting |
 | [Running it](#running-it) | Clone to first decision in six commands |
 | [About the data](#about-the-data) | Synthetic, and why — plus measured results |
+| [IEEE-CIS backtest](#ieee-cis-backtest) | The same engine on 590,540 real labelled transactions |
 | [API](#api) | Endpoint reference |
 | [Not included](#not-included) | What was deliberately left out |
 
@@ -327,6 +328,169 @@ first.** That is exactly the bust-out pattern.
 Reported as a single "precision" column, both would read 0% and someone would
 delete `THREE_DS_OK` — raising the score on every authenticated customer, and
 punishing the people who did the right thing.
+
+---
+
+## IEEE-CIS backtest
+
+Everything above is measured on data this project generated. This section is the
+same engine measured on **590,540 real labelled transactions**, and the numbers
+are much worse. Both are kept, because the distance between them is the point.
+
+Full report: [`docs/IEEE_RESULTS.md`](docs/IEEE_RESULTS.md).
+
+### Dataset and licence
+
+IEEE-CIS fraud detection data (Vesta Corporation, 2019) — 590,540 labelled
+transactions over 182 days, 20,663 of them fraud (**3.499%**).
+
+The licence permits academic and research use. It does **not** permit
+redistribution, so the CSVs are **not in this repository**, are loaded from a
+local path given by `IEEE_DATA_PATH`, and CI is green without them — the tests
+that need the dataset skip when it is absent.
+
+### Method
+
+Every row was replayed in `TransactionDT` order through the real decision
+pipeline — the same `decide_payment` the API calls, not a reimplementation. The
+engine built its velocity counters and entity links **from its own replayed
+history**, so each decision saw only what had already happened.
+
+- **60-day warm-up excluded** from every figure. Velocity counters start at zero,
+  so early decisions are made by an engine with no history.
+- The rule weights were fitted on the **first** post-warm-up half and measured on
+  the **second**. Reporting across both would include the period the weights were
+  tuned on.
+- 590,540 decisions in **60 minutes** (163 rows/s), strictly sequential —
+  parallel replay would destroy the ordering that makes velocity meaningful.
+
+### Result
+
+Eval half only — 172,985 held-out transactions, 3.44% fraud.
+
+| | synthetic (generated) | **IEEE-CIS (real, held out)** |
+|---|---|---|
+| transactions | 1,378 | **172,985** |
+| precision | 1.000 | **0.2794** |
+| recall | 0.559 | **0.1972** |
+| false positive rate | 0.000 | **0.01809** |
+| approval rate | 0.986 | **0.9758** |
+| ROC-AUC | — | **0.7776** |
+| PR-AUC | — | **0.1945** |
+| latency | p50 2.5ms · p95 3ms | **p50 3ms · p95 14ms · 0 budget breaches** |
+
+```
+TP=1,172   FP=3,022   FN=4,770   TN=164,021
+2.58 good customers blocked per fraud caught
+```
+
+**Precision falls from 1.000 to 0.279 and that is the honest result, not a
+regression.** The synthetic 1.000 was never a fact about fraud — it was a fact
+about a generator that produced no ambiguous transactions, where every
+fraudulent record carried a signature some rule was written to catch. Real
+traffic contains people who look like criminals and are not. 0.279 is what a
+rule set scores when it meets them.
+
+### Against a supervised baseline
+
+| approach | ROC-AUC | PR-AUC | explainable | latency |
+|---|---|---|---|---|
+| **fraud-engine rules** | 0.7776 | **0.1945** | yes | p95 14ms |
+| TAB-D2AD linear probe | 0.891 | **0.684** | no | — |
+| TAB-D2AD stage2 (best) | 0.744 | 0.325 | no | — |
+| TAB-D2AD stage1 diffusion | 0.566 | 0.193 | no | — |
+
+TAB-D2AD figures are from `nth2165/ep01-tabd2ad-ieee-evaluation`, built on
+[github.com/trongjhuongwr/D2AD_Project](https://github.com/trongjhuongwr/D2AD_Project).
+**They are not this project's work.**
+
+**A supervised linear probe reaches PR-AUC 0.684 against these rules' 0.1945 —
+the rules lose by roughly 3.5×.** They lose because the probe uses the 339
+undisclosed `V` features this engine deliberately refuses. What the rules have
+instead is not measured by AUC: every decision names the rules that fired and
+their weights, the whole ruleset is editable without a deploy, and it decides in
+single-digit milliseconds. Those are real advantages. They are not a defence of
+the AUC.
+
+### Most of this performance is not the engine's own work
+
+Six of the features — `vesta_c4`, `c8`, `c10`, `c12`, `d3`, `d5` — are aggregates
+**Vesta supplied already computed**. This engine cannot derive them and does not
+pretend to.
+
+Removing the 15 rules that read them leaves 8 rules the engine computes entirely
+for itself, and those 8:
+
+- top out at a maximum attainable score of **165** against a blocking threshold
+  of **232** — they cannot block a single transaction at the live thresholds;
+- score **PR-AUC 0.0876**, roughly half the headline's 0.1945 (ROC-AUC holds up
+  better, 0.7291 against 0.7776).
+
+**So the headline should not be read as a statement about this engine's feature
+computation.** Re-fitted to its own scale the engine-only subset reaches
+precision 0.1237 at recall 0.3825. That is what the engine achieves on its own
+signals.
+
+### How the number was checked
+
+The confusion matrix is computed **three independent ways** — the service-layer
+`performance_report`, raw SQL that shares no code with it, and the threshold
+sweep at t=232 — and all three produce **1,172 TP / 3,022 FP**. ROC-AUC is
+computed twice by different methods (rank statistic and curve integration); the
+report says so loudly if either pair ever disagrees rather than choosing a
+number.
+
+Separately, an independent implementation predicted the operating point at
+threshold 232 **before the engine replayed anything**, and the replay landed
+within a percentage point:
+
+| | predicted | measured |
+|---|---|---|
+| blocked | 2.40% | 2.42% |
+| recall | 19.90% | 19.72% |
+| precision | 28.80% | 27.94% |
+
+That is evidence neither implementation contains a gross error. It is not
+evidence that the approach is good — both could be correctly measuring a
+mediocre classifier, and the PR-AUC says they are.
+
+### What it found
+
+Real data makes lift discriminate. On synthetic data every detection rule showed
+lift 40.5 — arithmetic, not insight. Here it ranges from 1.27 to 13.83, and
+`VESTA_C12_GTE_4` reaches precision 0.475.
+
+It also produced a deletion candidate. **`HIGH_AMOUNT` fires 7,169 times at
+precision 0.0586 and has a unique contribution of zero** — every fraud it catches
+was already caught by another rule, so its weight buys nothing. It is still in
+the ruleset, reported rather than quietly removed. Finding it is the measurement
+working.
+
+### Caveats
+
+Five, and each one changes how the numbers should be read.
+
+1. **The label is entity-propagated.** Kaggle labels a transaction fraud if a
+   chargeback was reported *and* every later transaction on the same card,
+   account, email or billing address. The label was built by linking entities, so
+   rules that score by linking are partly scoring against their own construction
+   — `NEW_ACCOUNT_BURST` and both `VEL_ACCOUNT_*` rules most directly, since the
+   account proxy is built from `card1`, `addr1` and `P_emaildomain`. Device is
+   *not* on Kaggle's propagation list, so `LINK_DEVICE_ACCOUNTS` is less affected
+   than it looks.
+2. **Cards, accounts and devices are proxies**, reconstructed from anonymised
+   columns. 14,892 distinct "cards" across 590,540 transactions — **39.7
+   transactions each**. No real card portfolio looks like that; this is an
+   issuer-product grouping wearing the word *card*.
+3. **Six features are processor-supplied**, as above. Their definitions were
+   never published, so their weights are justified by measured lift alone and by
+   no account of what they count.
+4. **`V1`–`V339` were deliberately excluded.** Using them would make every rule
+   unexplainable — the exact failure this project criticises in PCA-anonymised
+   data — but it does handicap the rules against every model in the comparison
+   table. That comparison is not like-for-like.
+5. **One merchant, one geography, 2017–2019.** Fraud patterns move. Nothing here
+   generalises to a different portfolio.
 
 ---
 
