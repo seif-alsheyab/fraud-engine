@@ -1,0 +1,50 @@
+{
+  "merchant_code": "IEEE",
+  "ruleset": {
+    "id": "9abb8165-2bfa-4741-9cc7-9f25ec459358",
+    "name": "ieee-banded",
+    "version": 10
+  },
+  "rows": {
+    "replayed": 590540,
+    "limit": null,
+    "idempotent_replays": 21914
+  },
+  "periods": {
+    "epoch": "2017-12-01T00:00:00+00:00",
+    "epoch_is_arbitrary": true,
+    "warmup_days": 60,
+    "data_start": "2017-12-02T00:00:00+00:00",
+    "data_end": "2018-06-01T23:58:51+00:00",
+    "warmup_end": "2018-01-31T00:00:00+00:00",
+    "fit_end": "2018-04-01T23:59:25.500000+00:00",
+    "eval_start": "2018-04-01T23:59:25.500000+00:00",
+    "measured_days": 122.0,
+    "split": "by time, not by transaction count",
+    "note": "Weights were fitted on warmup_end..fit_end. Report eval_start..data_end as the headline; measuring across both halves includes the period the weights were tuned on. The halves are equal in DURATION, so their transaction counts differ -- count them from the decisions table using these boundaries rather than assuming a 50/50 split.",
+    "measurable": true
+  },
+  "decisions": {
+    "APPROVE": 552253,
+    "CHALLENGE": 24654,
+    "DECLINE": 3536,
+    "REVIEW": 10097
+  },
+  "labels": {
+    "FRAUD": 20663,
+    "LEGITIMATE": 569877
+  },
+  "days_to_label": {
+    "value": 45,
+    "synthetic": true,
+    "why": "IEEE-CIS ships no dispute date. Affects label-coverage only."
+  },
+  "latency_ms": {
+    "p50": 2,
+    "p95": 9,
+    "p99": 16,
+    "max": 231,
+    "measures": "in-process decide_payment, not end-to-end HTTP"
+  },
+  "wall_clock_seconds": 3624.7
+}
