@@ -153,12 +153,24 @@ async def decide_payment(
             "ip_country": payload.get("ip_country"),
             "billing_country": payload.get("billing_country"),
             "shipping_country": payload.get("shipping_country"),
+            # Categorical attributes the acquirer sends alongside the
+            # authorisation. Absent means None, never a stand-in: see
+            # transaction_features for why a guessed default is worse than
+            # an admitted unknown.
+            "product_code": payload.get("product_code"),
+            "card_type": payload.get("card_type"),
+            "addr_match": payload.get("addr_match"),
+            "dist_from_billing": payload.get("dist_from_billing"),
+            "has_identity_data": payload.get("has_identity_data"),
         },
         merchant_id=merchant["id"],
         entity_ids=entity_ids,
         bin_info=bin_info,
         required=required,
         now=occurred_at,
+        # Aggregates the PROCESSOR computed. The engine cannot derive these
+        # and never will; it only validates and records them.
+        supplied_features=payload.get("supplied_features"),
     )
 
     txn = await dr.insert_transaction(conn, {

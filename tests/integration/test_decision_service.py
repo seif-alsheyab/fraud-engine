@@ -236,9 +236,27 @@ class TestReviewQueue:
             # the moment the demo seed created its own review cases. A test
             # whose result depends on unrelated global state is not testing
             # what it claims to test.
-            queue = await dr.list_open_review_cases(conn, limit=200)
-            ours = [c for c in queue if c["external_id"] == "rev-1"]
+            #
+            # Filtering a PAGE of the global queue was the first fix, and it
+            # was still global state in disguise: the queue is ordered by SLA
+            # ascending, so any limit assumes fewer than that many cases are
+            # more urgent. The IEEE replay opened 10,097 cases dated 2018,
+            # every one of them ahead of this case dated now+4h, and the
+            # filtered list came back empty. Query the row itself instead --
+            # the only form that does not care what else exists.
+            cur = await conn.execute(
+                """
+                SELECT rc.status, rc.sla_due_at
+                  FROM review_cases rc
+                  JOIN decisions d   ON d.id = rc.decision_id
+                  JOIN transactions t ON t.id = d.transaction_id
+                 WHERE t.external_id = %s AND t.merchant_id = %s
+                """,
+                ("rev-1", m["id"]),
+            )
+            ours = await cur.fetchall()
             assert len(ours) == 1
+            assert ours[0]["status"] == "OPEN"
 
             # An unreviewed order is an unshipped order, so the case carries
             # its own deadline.

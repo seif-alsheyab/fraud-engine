@@ -21,7 +21,9 @@ from typing import Any
 
 from psycopg import AsyncConnection
 
+from fraud_engine.lib.errors import ValidationError
 from fraud_engine.repositories import entity_repository as er
+from fraud_engine.repositories import reference_repository as rr
 from fraud_engine.repositories import velocity_repository as vr
 
 # Which features need which query. Used to skip work a ruleset never asks
@@ -37,6 +39,83 @@ _LINK_FEATURES = {
     "accounts_per_device_30d",
     "emails_per_device_30d",
 }
+_LIST_FEATURES = {"on_deny_list", "on_allow_list", "on_watch_list"}
+
+# Everything transaction_features() reads straight off the payment.
+_TRANSACTION_FEATURES = {
+    "amount_minor",
+    "is_card_present",
+    "avs_match",
+    "cvv_match",
+    "three_ds_status",
+    "is_prepaid_card",
+    "ip_billing_country_match",
+    "bin_billing_country_match",
+    "shipping_billing_match",
+    "product_code",
+    "card_type",
+    "addr_match",
+    "dist_from_billing",
+    "has_identity_data",
+}
+
+_VELOCITY_ACCOUNT = {"velocity_account_1h", "velocity_account_24h"}
+
+_ENTITY_FEATURES = {
+    "card_age_days",
+    "card_seen_count",
+    "email_age_days",
+    "account_age_days",
+    "account_seen_count",
+}
+
+_VELOCITY_OTHER = {
+    "velocity_email_24h",
+    "velocity_device_1h",
+    "velocity_ip_1h",
+    "declines_card_24h",
+}
+
+# Features this engine derives for itself, from the payment or from its own
+# history. Every one of these is produced by compute_features given the
+# inputs it needs.
+ENGINE_COMPUTED_FEATURES = frozenset(
+    _TRANSACTION_FEATURES
+    | _VELOCITY_CARD
+    | _VELOCITY_ACCOUNT
+    | _VELOCITY_OTHER
+    | _ENTITY_FEATURES
+    | _LINK_FEATURES
+    | _LIST_FEATURES
+)
+
+# Features this engine CANNOT compute and never will: processor-supplied
+# aggregates that arrive on the authorisation message already calculated.
+# They are separated from ENGINE_COMPUTED_FEATURES rather than lumped in
+# because the distinction is the whole reason the vesta_ prefix exists -- a
+# reader of a fired rule must be able to tell what the engine counted from
+# what it was handed. See migration 007 and CLAUDE.md.
+SUPPLIED_ONLY_FEATURES = frozenset(
+    {"vesta_c4", "vesta_c8", "vesta_c10", "vesta_c12", "vesta_d3", "vesta_d5"}
+)
+
+# The set a rule is allowed to reference. Anything outside it is a rule that
+# can never fire: the condition evaluator treats a missing feature as
+# no-match, so the rule scores zero forever and looks merely quiet.
+COMPUTABLE_FEATURES = ENGINE_COMPUTED_FEATURES | SUPPLIED_ONLY_FEATURES
+
+
+def _or_none(value: Any) -> str | None:
+    """Normalise an absent categorical to None.
+
+    Blank strings arrive from CSV sources where an empty cell is "" rather
+    than NULL. Treating "" as a value creates a category that matches
+    nothing and is invisible in a rule listing.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def transaction_features(txn: dict[str, Any], bin_info: dict[str, Any] | None) -> dict[str, Any]:
@@ -69,6 +148,35 @@ def transaction_features(txn: dict[str, Any], bin_info: dict[str, Any] | None) -
         (shipping == billing) if (shipping and billing) else None
     )
 
+    # Categorical attributes the acquirer sends with the authorisation.
+    #
+    # Each is passed through unchanged and defaults to None, never to a
+    # stand-in value. A rule testing `card_type eq "debit"` must not fire
+    # because the field was missing and something guessed "credit" -- and,
+    # more importantly, a rule testing for a MISMATCH must not fire on a
+    # transaction where nothing was supplied to mismatch against.
+    #
+    # addr_match is the exception that proves the rule: its "(absent)" is a
+    # real, measured category in the IEEE data rather than a missing value,
+    # so it is mapped here explicitly rather than left as None. A rule must
+    # be able to test for it -- as a NULL it would simply never match, which
+    # is the failure this whole module has been bitten by four times.
+    features["product_code"] = _or_none(txn.get("product_code"))
+    features["card_type"] = _or_none(txn.get("card_type"))
+    features["addr_match"] = _or_none(txn.get("addr_match")) or "(absent)"
+
+    # A distance, so 0 is a legitimate value and must survive. `or None`
+    # would turn a transaction at the billing address into "unknown".
+    dist = txn.get("dist_from_billing")
+    features["dist_from_billing"] = None if dist is None else float(dist)
+
+    # Whether identity/device signals were captured AT ALL. Tri-state on
+    # purpose: False means the join ran and found nothing, None means nobody
+    # told us either way. Collapsing those into False would make every
+    # caller that omits the field look like a transaction with no identity.
+    identity = txn.get("has_identity_data")
+    features["has_identity_data"] = None if identity is None else bool(identity)
+
     return features
 
 
@@ -76,6 +184,30 @@ def _age_days(first_seen: datetime | None, now: datetime) -> int | None:
     if first_seen is None:
         return None
     return max(0, (now - first_seen).days)
+
+
+async def _merge_supplied(
+    conn: AsyncConnection, features: dict[str, Any], supplied: dict[str, Any]
+) -> None:
+    """Merge processor-supplied values, rejecting anything unregistered.
+
+    Validated against feature_definitions rather than against
+    SUPPLIED_ONLY_FEATURES, because the registry is the single description of
+    what a feature name means. A typo like `vesta_c40` must be an error at
+    the edge: accepted silently it would sit in the frozen snapshot looking
+    like evidence, while the rule that reads `vesta_c4` matched nothing.
+
+    Costs one query, and only when something was actually supplied -- the
+    ordinary path where no aggregates arrive pays nothing.
+    """
+    registered = await rr.list_feature_codes(conn)
+    unknown = sorted(set(supplied) - registered)
+    if unknown:
+        raise ValidationError(
+            f"Unregistered supplied feature(s): {', '.join(unknown)}. "
+            f"Add them to feature_definitions in a migration first."
+        )
+    features.update(supplied)
 
 
 async def compute_features(
@@ -87,19 +219,30 @@ async def compute_features(
     bin_info: dict[str, Any] | None,
     required: set[str],
     now: datetime | None = None,
+    supplied_features: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the full feature snapshot for one payment.
 
     `required` is the set of features the active ruleset actually
     references. Anything outside it is skipped, so adding an unused feature
     to the registry costs nothing at decision time.
+
+    `supplied_features` carries aggregates the PROCESSOR computed and sent
+    with the authorisation -- the vesta_ family. This engine cannot derive
+    them and does not pretend to. They are merged BEFORE anything the engine
+    computes for itself, so a caller can never overwrite a velocity counter
+    or an entity age with a value of its own choosing.
     """
     now = now or datetime.now(UTC)
     one_hour = now - timedelta(hours=1)
     one_day = now - timedelta(days=1)
     thirty_days = now - timedelta(days=30)
 
-    features = transaction_features(txn, bin_info)
+    features: dict[str, Any] = {}
+    if supplied_features:
+        await _merge_supplied(conn, features, supplied_features)
+
+    features.update(transaction_features(txn, bin_info))
 
     card_id = entity_ids.get("CARD")
     email_id = entity_ids.get("EMAIL")
@@ -138,6 +281,14 @@ async def compute_features(
         )
         features["velocity_ip_1h"] = v["txn_count"]
 
+    if account_id and (required & _VELOCITY_ACCOUNT):
+        v = await vr.account_velocity_windows(
+            conn, account_entity_id=account_id, now=now,
+            one_hour_ago=one_hour, one_day_ago=one_day,
+        )
+        features["velocity_account_1h"] = v["count_1h"]
+        features["velocity_account_24h"] = v["count_24h"]
+
     if card_id and "declines_card_24h" in required:
         features["declines_card_24h"] = await vr.declines_for_card(
             conn, card_entity_id=card_id, since=one_day, before=now
@@ -155,10 +306,16 @@ async def compute_features(
         if e:
             features["email_age_days"] = _age_days(e["first_seen_at"], now)
 
-    if account_id and "account_age_days" in required:
+    # One lookup serves both features. account_seen_count exists because
+    # account_age_days cannot tell a first-ever transaction from a returning
+    # account seen earlier the same day -- entities are upserted before
+    # features are computed, so both read 0. seen_count reads 1 on the first
+    # ever transaction and 2+ on a repeat, which is the distinguishing value.
+    if account_id and required & {"account_age_days", "account_seen_count"}:
         e = await er.find_entity_by_id(conn, account_id)
         if e:
             features["account_age_days"] = _age_days(e["first_seen_at"], now)
+            features["account_seen_count"] = e["seen_count"]
 
     # --- shared attributes ----------------------------------------------
     if required & _LINK_FEATURES:

@@ -31,9 +31,15 @@ class TestReferenceRepository:
     async def test_feature_registry_is_loaded(self):
         async with rollback_conn() as conn:
             codes = await rr.list_feature_codes(conn)
-            assert len(codes) == 27
+            # 27 from migration 006, the 13 IEEE-era features in 007, and
+            # account_seen_count in 008. Updated deliberately per migration:
+            # this assertion exists so a feature cannot appear in the registry
+            # without a migration behind it.
+            assert len(codes) == 41
+            assert "account_seen_count" in codes
             assert "velocity_card_1h" in codes
             assert "accounts_per_card_30d" in codes
+            assert "vesta_c4" in codes
 
     async def test_finds_the_active_ruleset(self):
         async with rollback_conn() as conn:

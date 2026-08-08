@@ -49,6 +49,31 @@ class DecisionRequest(BaseModel):
     channel: Literal["WEB", "MOBILE", "API", "POS"] = "WEB"
     occurred_at: datetime | None = None
 
+    # Categorical attributes an acquirer sends with the authorisation. Left
+    # as open strings rather than Literals on purpose: the permitted values
+    # differ per processor, and a Literal here would reject a valid code
+    # from a processor nobody had integrated when this line was written.
+    # The feature registry, not the schema, is what constrains rules.
+    product_code: str | None = Field(default=None, max_length=16)
+    card_type: str | None = Field(default=None, max_length=32)
+    addr_match: str | None = Field(default=None, max_length=32)
+    # A distance with no documented unit -- ordered magnitude only. Float
+    # rather than int because it is a measurement, not money; the BIGINT
+    # minor-units rule is about currency and does not apply.
+    dist_from_billing: float | None = None
+    has_identity_data: bool | None = None
+
+    # Aggregates the PROCESSOR already computed (the vesta_ family). This
+    # engine cannot derive them, so they arrive here or the rules that use
+    # them cannot fire. A dict rather than a column per feature: the set
+    # differs per processor and a schema migration per aggregate would make
+    # onboarding one a database change.
+    #
+    # Every key is validated against feature_definitions before use, so an
+    # unregistered name is rejected rather than sitting in the snapshot
+    # looking like evidence.
+    supplied_features: dict[str, float | int | bool | str | None] | None = None
+
     @field_validator("card_number")
     @classmethod
     def card_number_must_be_digits(cls, v: str | None) -> str | None:

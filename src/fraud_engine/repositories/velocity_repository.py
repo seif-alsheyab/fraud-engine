@@ -102,6 +102,41 @@ async def card_velocity_windows(
     return row
 
 
+async def account_velocity_windows(
+    conn: AsyncConnection,
+    *,
+    account_entity_id: UUID,
+    now: datetime,
+    one_hour_ago: datetime,
+    one_day_ago: datetime,
+) -> dict[str, Any]:
+    """Both account windows in ONE query, as card_velocity_windows does.
+
+    Two calls to entity_velocity would work and would cost two round trips
+    over the same 24h range -- the 1h window is a subset of the 24h one, so
+    the rows for both are already in memory after a single scan.
+
+    `before = now` excludes the transaction being decided. Without it every
+    account would read a velocity of at least 1 on its first ever payment,
+    and a `gte 2` rule would fire on the second rather than the third.
+    """
+    cur = await conn.execute(
+        """
+        SELECT
+          count(*) FILTER (WHERE occurred_at >= %(hour)s)::int  AS count_1h,
+          count(*) FILTER (WHERE occurred_at >= %(day)s)::int   AS count_24h
+          FROM transactions
+         WHERE account_entity_id = %(account)s
+           AND occurred_at >= %(day)s
+           AND occurred_at <  %(now)s
+        """,
+        {"account": account_entity_id, "hour": one_hour_ago, "day": one_day_ago, "now": now},
+    )
+    row = await cur.fetchone()
+    assert row is not None
+    return row
+
+
 async def declines_for_card(
     conn: AsyncConnection, *, card_entity_id: UUID, since: datetime, before: datetime
 ) -> int:

@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     # times out and a good sale is lost.
     decision_latency_budget_ms: int = 250
 
+    # Local directory holding the IEEE-CIS CSVs. Optional, because the
+    # dataset is never bundled and CI runs without it (plan §1.1) -- but it
+    # belongs HERE rather than being read from os.environ at the point of
+    # use. Settings loads .env; bare os.environ does not, so a plain
+    # `uv run python scripts/ieee/replay.py` would report the path as unset
+    # while it sits in .env being ignored.
+    ieee_data_path: str | None = None
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"

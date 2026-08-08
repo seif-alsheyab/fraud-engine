@@ -178,6 +178,74 @@ class TestVelocityOverHttp:
         assert body["decision"] in {"REVIEW", "DECLINE"}
 
 
+class TestSuppliedFeatures:
+    """The HTTP contract for processor-supplied aggregates.
+
+    The engine cannot derive the vesta_ family, so this endpoint is the only
+    way they can reach a rule. If the field is dropped or renamed, every
+    banded rule in the IEEE ruleset silently stops firing.
+    """
+
+    async def test_supplied_values_are_recorded_in_the_snapshot(self, client):
+        r = await client.post(
+            "/v1/decide",
+            json=payload(
+                external_id=f"{SCOPE}-supplied",
+                supplied_features={"vesta_c4": 3, "vesta_d5": 0},
+            ),
+        )
+        assert r.status_code == 200
+        features = r.json()["features"]
+        assert features["vesta_c4"] == 3
+        # 0 is the most recent possible D value, not a missing one.
+        assert features["vesta_d5"] == 0
+
+    async def test_an_unregistered_supplied_key_is_rejected(self, client):
+        r = await client.post(
+            "/v1/decide",
+            json=payload(
+                external_id=f"{SCOPE}-supplied-bad",
+                supplied_features={"vesta_c40": 1},
+            ),
+        )
+        # 400, not 200-with-the-key-dropped. Silently ignoring it would put a
+        # value in the frozen snapshot that no rule reads, while the rule
+        # that reads the correct spelling matched nothing.
+        assert r.status_code == 400
+        assert "vesta_c40" in r.text
+
+    async def test_the_new_transaction_attributes_reach_the_snapshot(self, client):
+        r = await client.post(
+            "/v1/decide",
+            json=payload(
+                external_id=f"{SCOPE}-attrs",
+                product_code="C",
+                card_type="debit",
+                addr_match="M2",
+                dist_from_billing=12.5,
+                has_identity_data=True,
+            ),
+        )
+        assert r.status_code == 200
+        features = r.json()["features"]
+        assert features["product_code"] == "C"
+        assert features["card_type"] == "debit"
+        assert features["addr_match"] == "M2"
+        assert features["dist_from_billing"] == 12.5
+        assert features["has_identity_data"] is True
+
+    async def test_omitting_them_yields_none_rather_than_a_guess(self, client):
+        r = await client.post("/v1/decide", json=payload(external_id=f"{SCOPE}-attrs-absent"))
+        assert r.status_code == 200
+        features = r.json()["features"]
+        assert features["product_code"] is None
+        assert features["card_type"] is None
+        assert features["dist_from_billing"] is None
+        assert features["has_identity_data"] is None
+        # The one deliberate exception: M4's absence is itself a category.
+        assert features["addr_match"] == "(absent)"
+
+
 class TestLabels:
     async def test_a_label_can_be_attached_to_a_past_transaction(self, client):
         ext = f"{SCOPE}-label-1"
@@ -251,7 +319,9 @@ class TestReference:
         # A rule-authoring UI reads this rather than hardcoding a list that
         # drifts out of sync with the database.
         assert "velocity_card_1h" in codes
-        assert len(codes) == 27
+        # 27 from migration 006, the 13 IEEE-era features in 007, and
+        # account_seen_count in 008. Updated deliberately per migration.
+        assert len(codes) == 41
 
     async def test_adding_to_the_deny_list_does_not_echo_the_raw_value(self, client):
         pan = "4999999999999999"
